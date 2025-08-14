@@ -4,14 +4,14 @@ OpenOCD-win-ftd2xxはOpenOCDを、Windowsで動作するようにビルドした
 オープンソースのlibusbやlibftdiではなく、FTDI社のプロプライエタリなFTD2XXドライバを使って動作するように書き換えました。
 
 ## 特徴
-* オープンソースのlibftdiとlibusbではなく、FTDI純正のFTD2XXで動くようにカスタマイズしているため、Zadigでlibusbに入れ替える必要がない
-* FTDI社のFT232HやFT2232D/H、FT4232HなどのMPSSEを使ったUSB-JTAGで汎用的に使える。
-* その他のUSB-JTAGケーブル(CMSIS-DAPやJ-LINK)には対応していない。
-* WindowsのEXEファイルで提供されるため、詳しくない人に「WSLを用意してください」と言ってを困らせる心配がない
+* Microsoft Windows上で動く(仮想環境が不要)
+* FTDI純正のFTD2XXで動くようにカスタマイズしているため、Zadigでドライバを入れ替える必要がない
+* FTDI社のFT232HやFT2232D/H、FT4232HなどのMPSSEを使ったUSB-JTAGで汎用的に使える
 * 最新のOpenOCD 0.12をベースにしている
 
 ターゲットは、ZYNQ7000とUltraScale+、Raspberry Pi 4に接続できることを確認しています。
 Windowsのネイティブアプリとして動作しますので、WSLなどの仮想環境、コンテナは不要です。
+詳しくない人に「WSLを用意してください」と言ってを困らせる心配がありません。
 
 ## ダウンロードとインストール
 https://github.com/tokuden/openocd-win-ftd2xx/OpenOCD-Win-FTD2XX.zip をダウンロードして解凍してください。
