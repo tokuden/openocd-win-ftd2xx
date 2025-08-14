@@ -4,6 +4,10 @@
  *   Copyright (C) 2012 by Andreas Fritiofson                              *
  *   andreas.fritiofson@gmail.com                                          *
  ***************************************************************************/
+/**************************************************************************
+ *   Copyright (C) 2025 by Ryuji Naitou (FTD2XX support)                   *
+ *   nahitafu@nifty.com                                                    *
+ ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
