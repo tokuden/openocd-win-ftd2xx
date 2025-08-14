@@ -1,0 +1,36 @@
+# Welcome to OpenOCD-win-ftd2xx
+
+OpenOCD-win-ftd2xxはOpenOCDを、Windowsで動作するようにビルドしたものです。
+オープンソースのlibusbやlibftdiではなく、FTDI社のプロプライエタリなFTD2XXドライバを使って動作するように書き換えました。
+
+## 特徴
+* オープンソースのlibftdiとlibusbではなく、FTDI純正のFTD2XXで動くようにカスタマイズしているため、Zadigでlibusbに入れ替える必要がない
+* FTDI社のFT232HやFT2232D/H、FT4232HなどのMPSSEを使ったUSB-JTAGで汎用的に使える。
+* その他のUSB-JTAGケーブル(CMSIS-DAPやJ-LINK)には対応していない。
+* WindowsのEXEファイルで提供されるため、詳しくない人に「WSLを用意してください」と言ってを困らせる心配がない
+* 最新のOpenOCD 0.12をベースにしている
+
+ターゲットは、ZYNQ7000とUltraScale+、Raspberry Pi 4に接続できることを確認しています。
+Windowsのネイティブアプリとして動作しますので、WSLなどの仮想環境、コンテナは不要です。
+
+## ダウンロードとインストール
+https://github.com/tokuden/openocd-win-ftd2xx/OpenOCD-Win-FTD2XX.zip をダウンロードして解凍してください。
+
+## 使い方
+MSDOSプロンプトを開いて、
+`openocd.exe -f ft2232h.cfg -f zynq7000.cfg`
+のように入力します。
+
+構成が決まっていたらバッチファイルを作ったほうがいいかと思います。
+特電のMPSSE-JTAGケーブルを使用する場合は、-f np1167.cfgと指定してください。
+起動すると以下のような画面になります。
+
+CPUのデバッグをするにはTELNETでlocalhost:4444にログインしたり、GDBでリモート接続する必要があります。
+例えば、物理メモリ0番地の内容をダンプするには、TeraTermを使ってlocalhost:4444にTELNET接続し、
+'''
+targets
+halt
+mdw phys 0 0x100
+redume
+'''
+
