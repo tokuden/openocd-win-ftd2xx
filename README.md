@@ -1,36 +1,58 @@
 # Welcome to OpenOCD-win-ftd2xx
 
-OpenOCD-win-ftd2xx��OpenOCD���AWindows�œ��삷��悤�Ƀr���h�������̂ł��B
-�I�[�v���\�[�X��libusb��libftdi�ł͂Ȃ��AFTDI�Ђ̃v���v���C�G�^����FTD2XX�h���C�o���g���ē��삷��悤�ɏ��������܂����B
+OpenOCD-win-ftd2xxはOpenOCDを、Windowsで動作するようにビルドしたものです。
+オープンソースのlibusbやlibftdiではなく、FTDI社のプロプライエタリなFTD2XXドライバを使って動作するように書き換えました。
 
-## ����
-* �I�[�v���\�[�X��libftdi��libusb�ł͂Ȃ��AFTDI������FTD2XX�œ����悤�ɃJ�X�^�}�C�Y���Ă��邽�߁AZadig��libusb�ɓ���ւ���K�v���Ȃ�
-* FTDI�Ђ�FT232H��FT2232D/H�AFT4232H�Ȃǂ�MPSSE���g����USB-JTAG�Ŕėp�I�Ɏg����B
-* ���̑���USB-JTAG�P�[�u��(CMSIS-DAP��J-LINK)�ɂ͑Ή����Ă��Ȃ��B
-* Windows��EXE�t�@�C���Œ񋟂���邽�߁A�ڂ����Ȃ��l�ɁuWSL��p�ӂ��Ă��������v�ƌ����Ă����点��S�z���Ȃ�
-* �ŐV��OpenOCD 0.12���x�[�X�ɂ��Ă���
+## 特徴
+* オープンソースのlibftdiとlibusbではなく、FTDI純正のFTD2XXで動くようにカスタマイズしているため、Zadigでlibusbに入れ替える必要がない
+* FTDI社のFT232HやFT2232D/H、FT4232HなどのMPSSEを使ったUSB-JTAGで汎用的に使える。
+* その他のUSB-JTAGケーブル(CMSIS-DAPやJ-LINK)には対応していない。
+* WindowsのEXEファイルで提供されるため、詳しくない人に「WSLを用意してください」と言ってを困らせる心配がない
+* 最新のOpenOCD 0.12をベースにしている
 
-�^�[�Q�b�g�́AZYNQ7000��UltraScale+�ARaspberry Pi 4�ɐڑ��ł��邱�Ƃ��m�F���Ă��܂��B
-Windows�̃l�C�e�B�u�A�v���Ƃ��ē��삵�܂��̂ŁAWSL�Ȃǂ̉��z���A�R���e�i�͕s�v�ł��B
+ターゲットは、ZYNQ7000とUltraScale+、Raspberry Pi 4に接続できることを確認しています。
+Windowsのネイティブアプリとして動作しますので、WSLなどの仮想環境、コンテナは不要です。
 
-## �_�E�����[�h�ƃC���X�g�[��
-https://github.com/tokuden/openocd-win-ftd2xx/OpenOCD-Win-FTD2XX.zip ���_�E�����[�h���ĉ𓀂��Ă��������B
+## ダウンロードとインストール
+https://github.com/tokuden/openocd-win-ftd2xx/OpenOCD-Win-FTD2XX.zip をダウンロードして解凍してください。
 
-## �g����
-MSDOS�v�����v�g���J���āA
+## 使い方
+MSDOSプロンプトを開いて、
+
 `openocd.exe -f ft2232h.cfg -f zynq7000.cfg`
-�̂悤�ɓ��͂��܂��B
 
-�\�������܂��Ă�����o�b�`�t�@�C����������ق����������Ǝv���܂��B
-���d��MPSSE-JTAG�P�[�u�����g�p����ꍇ�́A-f np1167.cfg�Ǝw�肵�Ă��������B
-�N������ƈȉ��̂悤�ȉ�ʂɂȂ�܂��B
+のように入力します。
 
-CPU�̃f�o�b�O������ɂ�TELNET��localhost:4444�Ƀ��O�C��������AGDB�Ń����[�g�ڑ�����K�v������܂��B
-�Ⴆ�΁A����������0�Ԓn�̓��e���_���v����ɂ́ATeraTerm���g����localhost:4444��TELNET�ڑ����A
-'''
+構成が決まっていたらバッチファイルを作ったほうがいいかと思います。
+特電のMPSSE-JTAGケーブルを使用する場合は、`-f np1167.cfg`と指定してください。
+起動すると以下のような画面になります。
+
+CPUのデバッグをするにはTELNETでlocalhost:4444にログインしたり、GDBでリモート接続する必要があります。
+例えば、物理メモリ0番地の内容をダンプするには、TeraTermを使ってlocalhost:4444にTELNET接続し、
+
+```
 targets
 halt
 mdw phys 0 0x100
 redume
-'''
+```
 
+とコマンドを打ちます。haltさせたらresumeしないとCPUが止まったままになります。
+
+## OpenOCD-win-FTD2XXの最大の特徴
+なひたふ版OpenOCDの最大の特徴は、**Windows環境で、libusbやWinUSBを使うことなくFTDIの純正デバイスドライバで動く**ということです。
+
+FTDIのデバイスはWindows PCに刺した瞬間にデバイスドライバが自動的にダウンロードされて使用可能になるため、通常の使い方をする限りはデバイスドライバのインストールは不要です。刺したらすぐに使える大変優れたものです。
+
+しかし、OpenOCDはオープンソースのソフトウェアで「GPL」でライセンスされています。
+困ったことにGPLが大好きな人たちは「GPLのソフトは美しく正義であるので、邪悪なプロプライエタリ(ソースが公開されていないソフト)をリンクさせてはいけない」という狂った思想によって、FTDIの純正ライブラリを使わずにlibusbやlibftdi1といった有志作成のオープンソースのデバイスドライバを使うようにしてしまいました。  
+OpenOCDからFTDIに関するコードが削除されたのは v0.10.0-rc1 からだと思います。
+
+しかし、Windowsは１つのUSB IDに対して1つのドライバしか使えません。  
+そこで、Zadigという危険ツールを使って、FTDIのデバイスドライバの代わりにlibusbを使うようにレジストリを改変してしまうことを推奨しているのです。
+
+zadigを使ってFTDIドライバをlibusbに置き換えてしまうとそのPCではFTDIのドライバが使えなくなるので、FTDIを使う他のアプリが使えなくなってしまうという大きな犠牲を払う必要があったのです。
+FTDIドライバが使えなくなった状態を解除するには、デバイスドライバをアンインストールして再インストールする必要がありますが、繰り返しているうちに、PCはだんだんおかしくなってきます。
+
+そもそもOpenOCDがFTDIのドライバを使わないのは、オープンソースとプロプライエタリを混ぜないという理由によるものですが、ユーザにとっては何の利益にもなりません。むしろ毎回のドライバ入れ替えで危険を体験するデメリットしかありません。
+そこで、私なひたふは、libusbとlibftdi1を使うように書かれたmpsse.cをFTDI純正ドライバで動くように書き換えました。
