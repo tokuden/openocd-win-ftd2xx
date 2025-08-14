@@ -14,7 +14,8 @@
 #include "helper/replacements.h"
 #include "helper/time_support.h"
 #include "libusb_helper.h"
-#include <libusb.h>
+//#include <libusb.h>
+#include "ftd2xx.h"
 
 /* Compatibility define for older libusb-1.0 */
 #ifndef LIBUSB_CALL
@@ -53,8 +54,9 @@
 #define SIO_RESET_PURGE_TX 2
 
 struct mpsse_ctx {
-	struct libusb_context *usb_ctx;
-	struct libusb_device_handle *usb_dev;
+//	struct libusb_context *usb_ctx;
+//	struct libusb_device_handle *usb_dev;
+	FT_HANDLE ftHandle;
 	unsigned int usb_write_timeout;
 	unsigned int usb_read_timeout;
 	uint8_t in_ep;
@@ -147,6 +149,17 @@ static bool device_location_equal(struct libusb_device *device, const char *loca
 	return result;
 }
 
+static bool nahi_match_ids(FT_DEVICE_LIST_INFO_NODE * devInfo, const uint16_t vids[], const uint16_t pids[])
+{
+	for (unsigned int i = 0; vids[i]; i++) {
+		if ((devInfo->ID >> 16) == vids[i] &&
+			(devInfo->ID & 0xffff)== pids[i]) {
+			return true;
+		}
+	}
+	return false;
+}
+
 /* Helper to open a libusb device that matches vid, pid, product string and/or serial string.
  * Set any field to 0 as a wildcard. If the device is found true is returned, with ctx containing
  * the already opened handle. ctx->interface must be set to the desired interface (channel) number
@@ -154,146 +167,168 @@ static bool device_location_equal(struct libusb_device *device, const char *loca
 static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t vids[], const uint16_t pids[],
 	const char *product, const char *serial, const char *location)
 {
-	struct libusb_device **list;
-	struct libusb_device_descriptor desc;
-	struct libusb_config_descriptor *config0;
-	int err;
+	FT_STATUS ftStatus;
 	bool found = false;
-	ssize_t cnt = libusb_get_device_list(ctx->usb_ctx, &list);
-	if (cnt < 0)
-		LOG_ERROR("libusb_get_device_list() failed with %s", libusb_error_name(cnt));
+	static DWORD prev_id = 0;
+	static int chid = 0;
+	DWORD cnt;
+	ftStatus = FT_ListDevices(&cnt, NULL, FT_LIST_NUMBER_ONLY);
+	if(ftStatus != FT_OK) {
+		LOG_ERROR("FT_ListDevices() failed");
+		return false;
+	}
+	printf("Nahitafu:Num of FTDI devices is %d\n",(int)cnt);
+	FT_DEVICE_LIST_INFO_NODE* devInfo;
+	devInfo = (FT_DEVICE_LIST_INFO_NODE*)malloc(sizeof(FT_DEVICE_LIST_INFO_NODE) * cnt);
+	FT_CreateDeviceInfoList(&cnt);
+	ftStatus = FT_GetDeviceInfoList(devInfo,&cnt);
+	DWORD Type = 0;
 
 	for (ssize_t i = 0; i < cnt; i++) {
-		struct libusb_device *device = list[i];
+//		struct libusb_device *device = list[i];
 
-		err = libusb_get_device_descriptor(device, &desc);
-		if (err != LIBUSB_SUCCESS) {
-			LOG_ERROR("libusb_get_device_descriptor() failed with %s", libusb_error_name(err));
+//		err = libusb_get_device_descriptor(device, &desc);
+//		if (err != LIBUSB_SUCCESS) {
+//			LOG_ERROR("libusb_get_device_descriptor() failed with %s", libusb_error_name(err));
+//			continue;
+//		}
+		printf(" (%zd) ID=%04X:%04X Loc=%lx S/N=\"%s\" Desc=\"%s\" ", i, (uint16_t)(devInfo[i].ID >> 16), (uint16_t)(devInfo[i].ID & 0xffff), devInfo[i].LocId, devInfo[i].SerialNumber, devInfo[i].Description);
+
+		if (!nahi_match_ids(&devInfo[i], vids, pids))
+		{
+			printf(", skip\n");
+			prev_id = devInfo[i].ID;
 			continue;
 		}
 
-		if (!jtag_libusb_match_ids(&desc, vids, pids))
+		if(devInfo[i].ID != prev_id) chid = 0;
+		else chid++;
+		prev_id = devInfo[i].ID;
+		if(ctx->interface != chid) {
+			printf(", ch skip\n");
 			continue;
-
-		err = libusb_open(device, &ctx->usb_dev);
-		if (err != LIBUSB_SUCCESS) {
-			LOG_ERROR("libusb_open() failed with %s",
-				  libusb_error_name(err));
+		}
+		printf(", ID match!\n");
+		ftStatus = FT_Open(i, &ctx->ftHandle);
+		if (ftStatus != FT_OK) {
+			LOG_ERROR("FT_Open() failed");
 			continue;
 		}
 
-		if (location && !device_location_equal(device, location)) {
-			libusb_close(ctx->usb_dev);
+//		if (location && !device_location_equal(device, location)) {
+//			libusb_close(ctx->usb_dev);
+//			continue;
+//		}
+
+		if (product && strcasecmp(devInfo[i].Description, product)) {
+			FT_Close(ctx->ftHandle);
 			continue;
 		}
 
-		if (product && !string_descriptor_equal(ctx->usb_dev, desc.iProduct, product)) {
-			libusb_close(ctx->usb_dev);
+		if (serial && strcasecmp(devInfo[i].SerialNumber, serial)) {
+			FT_Close(ctx->ftHandle);
 			continue;
 		}
-
-		if (serial && !string_descriptor_equal(ctx->usb_dev, desc.iSerialNumber, serial)) {
-			libusb_close(ctx->usb_dev);
-			continue;
-		}
+		Type = devInfo[i].Type;
 
 		found = true;
 		break;
 	}
 
-	libusb_free_device_list(list, 1);
-
+	free(devInfo);
 	if (!found) {
 		/* The caller reports detailed error desc */
 		return false;
 	}
 
-	err = libusb_get_config_descriptor(libusb_get_device(ctx->usb_dev), 0, &config0);
-	if (err != LIBUSB_SUCCESS) {
+//	err = libusb_get_config_descriptor(libusb_get_device(ctx->usb_dev), 0, &config0);
+/*	if (err != LIBUSB_SUCCESS) {
 		LOG_ERROR("libusb_get_config_descriptor() failed with %s", libusb_error_name(err));
 		libusb_close(ctx->usb_dev);
 		return false;
 	}
-
+*/
 	/* Make sure the first configuration is selected */
-	int cfg;
+/*	int cfg;
 	err = libusb_get_configuration(ctx->usb_dev, &cfg);
 	if (err != LIBUSB_SUCCESS) {
 		LOG_ERROR("libusb_get_configuration() failed with %s", libusb_error_name(err));
 		goto error;
 	}
-
-	if (desc.bNumConfigurations > 0 && cfg != config0->bConfigurationValue) {
+*/
+/*	if (desc.bNumConfigurations > 0 && cfg != config0->bConfigurationValue) {
 		err = libusb_set_configuration(ctx->usb_dev, config0->bConfigurationValue);
 		if (err != LIBUSB_SUCCESS) {
 			LOG_ERROR("libusb_set_configuration() failed with %s", libusb_error_name(err));
 			goto error;
 		}
 	}
-
+*/
 	/* Try to detach ftdi_sio kernel module */
-	err = libusb_detach_kernel_driver(ctx->usb_dev, ctx->interface);
+/*	err = libusb_detach_kernel_driver(ctx->usb_dev, ctx->interface);
 	if (err != LIBUSB_SUCCESS && err != LIBUSB_ERROR_NOT_FOUND
 			&& err != LIBUSB_ERROR_NOT_SUPPORTED) {
 		LOG_WARNING("libusb_detach_kernel_driver() failed with %s, trying to continue anyway",
 			libusb_error_name(err));
 	}
-
 	err = libusb_claim_interface(ctx->usb_dev, ctx->interface);
 	if (err != LIBUSB_SUCCESS) {
 		LOG_ERROR("libusb_claim_interface() failed with %s", libusb_error_name(err));
 		goto error;
 	}
+*/
 
 	/* Reset FTDI device */
-	err = libusb_control_transfer(ctx->usb_dev, FTDI_DEVICE_OUT_REQTYPE,
-			SIO_RESET_REQUEST, SIO_RESET_SIO,
-			ctx->index, NULL, 0, ctx->usb_write_timeout);
-	if (err < 0) {
-		LOG_ERROR("failed to reset FTDI device: %s", libusb_error_name(err));
+	ftStatus = FT_ResetDevice(ctx->ftHandle);
+//	err = libusb_control_transfer(ctx->usb_dev, FTDI_DEVICE_OUT_REQTYPE,
+//			SIO_RESET_REQUEST, SIO_RESET_SIO,
+//			ctx->index, NULL, 0, ctx->usb_write_timeout);
+	if (ftStatus != FT_OK) {
+		LOG_ERROR("failed to reset FTDI device: %s", "");
 		goto error;
 	}
 
-	switch (desc.bcdDevice) {
-	case 0x500:
+	switch (Type) {
+	case FT_DEVICE_2232C:
 		ctx->type = TYPE_FT2232C;
 		break;
-	case 0x700:
+	case FT_DEVICE_2232H:
 		ctx->type = TYPE_FT2232H;
 		break;
-	case 0x800:
+	case FT_DEVICE_4232H:
 		ctx->type = TYPE_FT4232H;
 		break;
-	case 0x900:
+	case FT_DEVICE_232H:
 		ctx->type = TYPE_FT232H;
 		break;
-	case 0x2800:
+	case FT_DEVICE_2233HP:
 		ctx->type = TYPE_FT2233HP;
 		break;
-	case 0x2900:
+	case FT_DEVICE_4233HP:
 		ctx->type = TYPE_FT4233HP;
 		break;
-	case 0x3000:
+	case FT_DEVICE_2232HP:
 		ctx->type = TYPE_FT2232HP;
 		break;
-	case 0x3100:
+	case FT_DEVICE_4232HP:
 		ctx->type = TYPE_FT4232HP;
 		break;
-	case 0x3200:
+	case FT_DEVICE_233HP:
 		ctx->type = TYPE_FT233HP;
 		break;
-	case 0x3300:
+	case FT_DEVICE_232HP:
 		ctx->type = TYPE_FT232HP;
 		break;
-	case 0x3600:
+	case FT_DEVICE_4232HA:
 		ctx->type = TYPE_FT4232HA;
 		break;
 	default:
-		LOG_ERROR("unsupported FTDI chip type: 0x%04x", desc.bcdDevice);
+		LOG_ERROR("unsupported FTDI chip type: 0x%lx", Type);
 		goto error;
 	}
 
 	/* Determine maximum packet size and endpoint addresses */
+/*
 	if (!(desc.bNumConfigurations > 0 && ctx->interface < config0->bNumInterfaces
 			&& config0->interface[ctx->interface].num_altsetting > 0))
 		goto desc_error;
@@ -319,13 +354,16 @@ static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t vids[], c
 		goto desc_error;
 
 	libusb_free_config_descriptor(config0);
+*/
+	printf("Nahitafu:FTD2XX open success.\n");
 	return true;
 
 desc_error:
 	LOG_ERROR("unrecognized USB device descriptor");
+
 error:
-	libusb_free_config_descriptor(config0);
-	libusb_close(ctx->usb_dev);
+//	libusb_free_config_descriptor(config0);
+	FT_Close(ctx->ftHandle);
 	return false;
 }
 
@@ -333,7 +371,7 @@ struct mpsse_ctx *mpsse_open(const uint16_t vids[], const uint16_t pids[], const
 	const char *serial, const char *location, int channel)
 {
 	struct mpsse_ctx *ctx = calloc(1, sizeof(*ctx));
-	int err;
+	FT_STATUS ftStatus;
 
 	if (!ctx)
 		return NULL;
@@ -359,11 +397,11 @@ struct mpsse_ctx *mpsse_open(const uint16_t vids[], const uint16_t pids[], const
 	ctx->usb_read_timeout = 5000;
 	ctx->usb_write_timeout = 5000;
 
-	err = libusb_init(&ctx->usb_ctx);
+/*	err = libusb_init(&ctx->usb_ctx);
 	if (err != LIBUSB_SUCCESS) {
 		LOG_ERROR("libusb_init() failed with %s", libusb_error_name(err));
 		goto error;
-	}
+	}*/
 
 	if (!open_matching_device(ctx, vids, pids, description, serial, location)) {
 		LOG_ERROR("unable to open ftdi device with description '%s', "
@@ -371,45 +409,85 @@ struct mpsse_ctx *mpsse_open(const uint16_t vids[], const uint16_t pids[], const
 				description ? description : "*",
 				serial ? serial : "*",
 				location ? location : "*");
-		ctx->usb_dev = NULL;
+//		ctx->usb_dev = NULL;
 		goto error;
 	}
+	FT_SetTimeouts(ctx->ftHandle, ctx->usb_read_timeout, ctx->usb_write_timeout);
+	FT_SetLatencyTimer(ctx->ftHandle, ctx->usb_write_timeout);
 
-	err = libusb_control_transfer(ctx->usb_dev, FTDI_DEVICE_OUT_REQTYPE,
+/*	err = libusb_control_transfer(ctx->usb_dev, FTDI_DEVICE_OUT_REQTYPE,
 			SIO_SET_LATENCY_TIMER_REQUEST, 255, ctx->index, NULL, 0,
 			ctx->usb_write_timeout);
 	if (err < 0) {
 		LOG_ERROR("unable to set latency timer: %s", libusb_error_name(err));
 		goto error;
 	}
+*/
+	DWORD dwNumBytesToRead,dwNumBytesRead;
+	ftStatus = FT_GetQueueStatus(ctx->ftHandle, &dwNumBytesToRead);
+	if ((ftStatus == FT_OK) && (dwNumBytesToRead > 0)) {
+		FT_Read(ctx->ftHandle, ctx->read_buffer, dwNumBytesToRead, &dwNumBytesRead);
+	}
 
-	err = libusb_control_transfer(ctx->usb_dev,
-			FTDI_DEVICE_OUT_REQTYPE,
-			SIO_SET_BITMODE_REQUEST,
-			0x0b | (BITMODE_MPSSE << 8),
-			ctx->index,
-			NULL,
-			0,
-			ctx->usb_write_timeout);
-	if (err < 0) {
-		LOG_ERROR("unable to set MPSSE bitmode: %s", libusb_error_name(err));
+	FT_SetUSBParameters(ctx->ftHandle, ctx->read_size, ctx->write_size);
+	FT_SetChars(ctx->ftHandle, FALSE, 0, FALSE, 0);
+	FT_SetBitMode(ctx->ftHandle, 0, 0x00);
+	ftStatus = FT_SetBitMode(ctx->ftHandle, 0, 0x02);
+	if (ftStatus != FT_OK) {
+		LOG_ERROR("unable to set MPSSE bitmode: %s", "");
 		goto error;
 	}
+	Sleep(50);
 
 	mpsse_purge(ctx);
 
+	DWORD dwNumBytesToSend = 0;
+	DWORD dwNumBytesSent;
+	ctx->write_buffer[dwNumBytesToSend++] = 0xaa; // undefined command
+	FT_Write(ctx->ftHandle, ctx->write_buffer, dwNumBytesToSend, &dwNumBytesSent);
+	dwNumBytesToSend = 0; // Reset output buffer pointer
+	int loopnum = 0;
+	do {
+		ftStatus = FT_GetQueueStatusEx(ctx->ftHandle, &dwNumBytesToRead);
+		loopnum++;
+		Sleep(10);
+	} while ((dwNumBytesToRead == 0) && (ftStatus == FT_OK) && (loopnum < 100));
+	if(loopnum == 100)
+	{
+		printf("ERROR: No reply from FT device %d", channel);
+		FT_Close(ctx->ftHandle);
+		return NULL; // Exit with error
+	}
+	FT_Read(ctx->ftHandle, ctx->read_buffer, dwNumBytesToRead, &dwNumBytesRead);
+	bool receive_echo = false;
+	for (int i = 0; i < dwNumBytesRead - 1; i++)
+	{
+		if ((ctx->read_buffer[i] == 0xFA) && (ctx->read_buffer[i + 1] == 0xAA))
+		{
+			receive_echo = TRUE;
+			//printf("sync %d",i);
+			break;
+		}
+	}
+	if (receive_echo == FALSE)
+	{
+		printf("Error in synchronizing the MPSSE");
+		FT_Close(ctx->ftHandle);
+		return NULL; // Exit with error
+	}
+	printf("Nahitafu:FTD2XX sync OK\n");
 	return ctx;
 error:
-	mpsse_close(ctx);
+	FT_Close(ctx->ftHandle);
 	return NULL;
 }
 
 void mpsse_close(struct mpsse_ctx *ctx)
 {
-	if (ctx->usb_dev)
-		libusb_close(ctx->usb_dev);
-	if (ctx->usb_ctx)
-		libusb_exit(ctx->usb_ctx);
+	if (ctx->ftHandle)
+		FT_Close(ctx->ftHandle);
+//	if (ctx->usb_ctx)
+//		libusb_exit(ctx->usb_ctx);
 	bit_copy_discard(&ctx->read_queue);
 
 	free(ctx->write_buffer);
@@ -431,7 +509,9 @@ static void mpsse_purge(struct mpsse_ctx *ctx)
 	ctx->read_count = 0;
 	ctx->retval = ERROR_OK;
 	bit_copy_discard(&ctx->read_queue);
-	err = libusb_control_transfer(ctx->usb_dev, FTDI_DEVICE_OUT_REQTYPE, SIO_RESET_REQUEST,
+	FT_Purge(ctx->ftHandle, FT_PURGE_RX);
+	FT_Purge(ctx->ftHandle, FT_PURGE_TX);
+/*	err = libusb_control_transfer(ctx->usb_dev, FTDI_DEVICE_OUT_REQTYPE, SIO_RESET_REQUEST,
 			SIO_RESET_PURGE_RX, ctx->index, NULL, 0, ctx->usb_write_timeout);
 	if (err < 0) {
 		LOG_ERROR("unable to purge ftdi rx buffers: %s", libusb_error_name(err));
@@ -444,7 +524,9 @@ static void mpsse_purge(struct mpsse_ctx *ctx)
 		LOG_ERROR("unable to purge ftdi tx buffers: %s", libusb_error_name(err));
 		return;
 	}
+*/
 }
+
 
 static unsigned int buffer_write_space(struct mpsse_ctx *ctx)
 {
@@ -788,7 +870,8 @@ struct transfer_result {
 	unsigned int transferred;
 };
 
-static LIBUSB_CALL void read_cb(struct libusb_transfer *transfer)
+#if 0
+LIBUSB_CALL void read_cb(struct libusb_transfer *transfer)
 {
 	struct transfer_result *res = transfer->user_data;
 	struct mpsse_ctx *ctx = res->ctx;
@@ -846,6 +929,25 @@ static LIBUSB_CALL void write_cb(struct libusb_transfer *transfer)
 			res->done = true;
 	}
 }
+#endif
+
+void dump_buffer(const char *title, uint8_t *buffer, int count, int actual)
+{
+/*	printf("\e[35m");
+	printf("Dump %s: \e[0m %d bytes (actual %d bytes)\n",title, count, actual);
+	if(count == 0) printf("none\n");
+	for(int i=0;i<count;i++)
+	{
+		if((i & 15) == 0) printf("%04x ", i);
+		if((i & 15) == 8) printf(" ");
+		printf("%02x ",buffer[i]);
+		if((i & 15) == 15) printf("\n");
+	}
+	if((count & 15) != 0) printf("\n");
+	fflush(stdout);
+*/
+}
+
 
 int mpsse_flush(struct mpsse_ctx *ctx)
 {
@@ -875,22 +977,31 @@ int mpsse_flush(struct mpsse_ctx *ctx)
 	}
 
 	struct transfer_result write_result = { .ctx = ctx, .done = false };
-	struct libusb_transfer *write_transfer = libusb_alloc_transfer(0);
-	libusb_fill_bulk_transfer(write_transfer, ctx->usb_dev, ctx->out_ep, ctx->write_buffer,
-		ctx->write_count, write_cb, &write_result, ctx->usb_write_timeout);
-	retval = libusb_submit_transfer(write_transfer);
-	if (retval != LIBUSB_SUCCESS)
+//	struct libusb_transfer *write_transfer = libusb_alloc_transfer(0);
+//	libusb_fill_bulk_transfer(write_transfer, ctx->usb_dev, ctx->out_ep, ctx->write_buffer,
+//		ctx->write_count, write_cb, &write_result, ctx->usb_write_timeout);
+	DWORD dwBytesWritten;
+
+	FT_STATUS ftStatus = FT_Write(ctx->ftHandle,ctx->write_buffer, ctx->write_count, &dwBytesWritten);
+	dump_buffer("WriteBuffer",ctx->write_buffer, ctx->write_count, dwBytesWritten);
+	write_result.done = true;
+//	retval = libusb_submit_transfer(write_transfer);
+	if (ftStatus != FT_OK)
 		goto error_check;
 
+	DWORD dwBytesReturned;
 	if (ctx->read_count) {
-		read_transfer = libusb_alloc_transfer(0);
-		libusb_fill_bulk_transfer(read_transfer, ctx->usb_dev, ctx->in_ep, ctx->read_chunk,
-			ctx->read_chunk_size, read_cb, &read_result,
-			ctx->usb_read_timeout);
-		retval = libusb_submit_transfer(read_transfer);
-		if (retval != LIBUSB_SUCCESS)
+//		read_transfer = libusb_alloc_transfer(0);
+//		libusb_fill_bulk_transfer(read_transfer, ctx->usb_dev, ctx->in_ep, ctx->read_chunk,
+//			ctx->read_chunk_size, read_cb, &read_result,
+//			ctx->usb_read_timeout);
+//		retval = libusb_submit_transfer(read_transfer);
+		ftStatus = FT_Read(ctx->ftHandle,ctx->read_buffer, ctx->read_count, &dwBytesReturned);
+		read_result.done = true;
+		if (ftStatus != FT_OK)
 			goto error_check;
 	}
+	dump_buffer("ReadBuffer",ctx->read_buffer, ctx->read_count,dwBytesReturned);
 
 	/* Polling loop, more or less taken from libftdi */
 	int64_t start = timeval_ms();
@@ -901,7 +1012,7 @@ int mpsse_flush(struct mpsse_ctx *ctx)
 		timeout_usb.tv_sec = 1;
 		timeout_usb.tv_usec = 0;
 
-		retval = libusb_handle_events_timeout_completed(ctx->usb_ctx, &timeout_usb, NULL);
+//		retval = libusb_handle_events_timeout_completed(ctx->usb_ctx, &timeout_usb, NULL);
 		keep_alive();
 
 		int64_t now = timeval_ms();
@@ -915,11 +1026,14 @@ int mpsse_flush(struct mpsse_ctx *ctx)
 			continue;
 
 		if (retval != LIBUSB_SUCCESS) {
-			libusb_cancel_transfer(write_transfer);
-			if (read_transfer)
-				libusb_cancel_transfer(read_transfer);
+//			libusb_cancel_transfer(write_transfer);
+//			if (read_transfer)
+//				libusb_cancel_transfer(read_transfer);
 		}
+		break;
 	}
+	write_result.transferred = dwBytesWritten;
+	read_result.transferred = dwBytesReturned;
 
 error_check:
 	if (retval != LIBUSB_SUCCESS) {
@@ -949,9 +1063,9 @@ error_check:
 	if (retval != ERROR_OK)
 		mpsse_purge(ctx);
 
-	libusb_free_transfer(write_transfer);
-	if (read_transfer)
-		libusb_free_transfer(read_transfer);
+//	libusb_free_transfer(write_transfer);
+//	if (read_transfer)
+//		libusb_free_transfer(read_transfer);
 
 	return retval;
 }
