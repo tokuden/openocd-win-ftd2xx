@@ -19,6 +19,8 @@ https://github.com/tokuden/openocd-win-ftd2xx/OpenOCD-Win-FTD2XX.zip をダウ�
 このレポジトリは本家OpenOCDを2025年8月14日にフォークしてきたものなので、様々なファイルがありますが、  
 ユーザとして真に実行に必要なものは OpenOCD-Win-FTD2XX.zip に固めてあるものだけです。
 
+![ZIPファイルを解凍したようす](https://github.com/tokuden/openocd-win-ftd2xx/blob/images/folder.png)
+
 ## 使い方
 MSDOSプロンプトを開いて、
 
